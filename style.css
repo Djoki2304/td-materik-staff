@@ -221,3 +221,29 @@ label.f > select { background-image: linear-gradient(45deg, transparent 50%, var
 .brand img { width: 38px; height: 38px; border-radius: 10px; object-fit: cover; box-shadow: var(--shadow); }
 .brand b { display: block; font-size: 17px; line-height: 1.15; }
 .brand small { color: var(--muted); font-size: 12px; }
+
+/* Итоги */
+.hero { font-size: 40px; font-weight: 700; letter-spacing: -1px; line-height: 1.1; margin: 2px 0 4px; }
+.share { height: 6px; border-radius: 3px; background: var(--off-bg); overflow: hidden; margin-top: 6px; }
+.share i { display: block; height: 100%; background: var(--series, #2a78d6); border-radius: 3px; }
+.stat .sub { margin-top: 1px; }
+details.tbl { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+details.tbl summary { color: var(--accent); font-size: 14px; font-weight: 600; cursor: pointer; }
+
+.chart { --series: #2a78d6; --grid: #e1e0d9; --axis: #c3c2b7; --muted-ink: #898781; padding-top: 20px; }
+@media (prefers-color-scheme: dark) { .chart, .card { --series: #3987e5; --grid: #2c2c2a; --axis: #383835; } }
+.plot { position: relative; height: 130px; margin-left: 46px; }
+.gl { position: absolute; left: 0; right: 0; height: 0; border-top: 1px solid var(--grid); }
+.gl:first-child { border-top-color: var(--axis); }
+.gl span { position: absolute; right: calc(100% + 8px); top: -8px; font-size: 11px; color: var(--muted-ink); white-space: nowrap; }
+.cols { position: absolute; inset: 0; display: flex; }
+.col { position: relative; flex: 1; height: 100%; border: 0; background: none; padding: 0;
+  display: flex; align-items: flex-end; justify-content: center; }
+.bar { display: block; width: 24px; max-width: 70%; background: var(--series); opacity: .38;
+  border-radius: 4px 4px 0 0; }
+.col.on .bar { opacity: 1; }
+.val { position: absolute; left: 50%; transform: translateX(-50%); font-size: 12px; font-weight: 700;
+  white-space: nowrap; color: var(--text); }
+.xlab { display: flex; margin-left: 46px; margin-top: 6px; }
+.xlab span { flex: 1; text-align: center; font-size: 12px; color: var(--muted-ink); }
+.xlab span.on { color: var(--text); font-weight: 600; }

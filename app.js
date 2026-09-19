@@ -12,7 +12,7 @@ function defaults() {
   return {
     v: 1,
     settings: { currency: '₽', payEvery: 5, perDay: 10, pinHash: null, shopName: 'ТД Материк', logo: null },
-    positions: ['Продавец', 'Кассир', 'Грузчик', 'Администратор', 'Уборщица'].map(n => ({ id: uid(), name: n, rate: 0 })),
+    positions: ['Продавец', 'Кассир', 'Грузчик', 'Администратор', 'Уборщица'].map(n => ({ id: uid(), name: n, rate: 0, pay: n === 'Администратор' ? 'month' : 'day' })),
     employees: [], att: {}, payments: [],
     meta: { lastBackup: null, created: Date.now() }
   };
@@ -37,7 +37,7 @@ try { localStorage.setItem(KEY + '.probe', '1'); localStorage.removeItem(KEY + '
 try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
 
 /* ================= Форматирование ================= */
-const nf = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 });
+const nf = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
 const money = n => nf.format(Math.round(n * 100) / 100) + ' ' + (S.settings.currency || '');
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
@@ -71,6 +71,9 @@ const getEmp = id => S.employees.find(e => e.id === id);
 const activeEmps = () => S.employees.filter(e => e.active !== false);
 const posName = e => (S.positions.find(p => p.id === e.positionId) || {}).name || 'Без должности';
 const rateNow = e => L.rateOf(e, S.positions);
+const isMonthly = e => L.isMonthly(e, S.positions);
+const rateLabel = e => money(rateNow(e)) + (isMonthly(e) ? '/мес' : '/день');
+const dueOf = e => L.dueInfo(S, e, L.today(), S.settings.payEvery);
 const schedLabel = e => e.schedule === 'free' || !L.SCHEDULES[e.schedule] ? 'Свободный' : e.schedule;
 
 function setStatus(empId, date, st) {
@@ -79,13 +82,13 @@ function setStatus(empId, date, st) {
   const a = S.att[empId] = S.att[empId] || {};
   const cur = a[date];
   if (!st) delete a[date];
-  else if (st === 'w') a[date] = { s: 'w', r: cur && cur.s === 'w' ? cur.r : rateNow(e) };
+  else if (st === 'w') a[date] = { s: 'w', r: cur && cur.s === 'w' ? cur.r : L.dayRate(e, S.positions) };
   else a[date] = { s: st };
   save();
   return true;
 }
 const balance = id => L.balanceOf(S, id);
-const dueList = () => activeEmps().filter(e => L.unpaid(S, e.id, L.today()).days >= S.settings.payEvery);
+const dueList = () => activeEmps().filter(e => dueOf(e).due);
 
 /* ================= Состояние интерфейса ================= */
 const ui = { tab: 'today', date: null, month: L.today().slice(0, 7), salView: 'due', showOff: false, matrixFresh: true };
@@ -127,7 +130,7 @@ function empRow(e, date) {
   const st = (L.getRec(S.att, e.id, date) || {}).s;
   const other = st && st !== 'w' && st !== 'a';
   return `<div class="row">${avatar(e)}
-    <div class="grow"><div class="name">${esc(e.name)}</div><div class="sub">${esc(posName(e))} · ${money(rateNow(e))}</div></div>
+    <div class="grow"><div class="name">${esc(e.name)}</div><div class="sub">${esc(posName(e))} · ${isMonthly(e) ? 'оклад' : money(rateNow(e))}</div></div>
     <div class="seg">
       <button class="sbtn ${st === 'w' ? 'on ok' : ''}" data-act="mark" data-emp="${e.id}" data-st="w" aria-label="Вышел">✓</button>
       <button class="sbtn ${st === 'a' ? 'on bad' : ''}" data-act="mark" data-emp="${e.id}" data-st="a" aria-label="Прогул">✕</button>
@@ -173,7 +176,7 @@ function viewToday() {
 
   const dues = dueList();
   if (dues.length) {
-    const sum = dues.reduce((s, e) => s + Math.max(0, balance(e.id)), 0);
+    const sum = dues.reduce((s, e) => s + L.payoutSuggest(S, e, tdy, S.settings.payEvery).amount, 0);
     html += `<div class="banner info"><div class="grow"><b>Пора платить: ${dues.length} ${plural(dues.length, 'сотрудник', 'сотрудника', 'сотрудников')}</b>Всего ${money(sum)}</div>
       <button class="btn small primary" data-act="tab" data-tab="pay">Открыть</button></div>`;
   }
@@ -234,26 +237,33 @@ function viewPay() {
   const tdy = L.today(), N = S.settings.payEvery;
   let html = `<div class="topbar"><h1>Зарплата</h1></div>
     <div class="segtabs"><button class="${ui.salView === 'due' ? 'on' : ''}" data-act="salView" data-v="due">К выплате</button>
-    <button class="${ui.salView === 'report' ? 'on' : ''}" data-act="salView" data-v="report">Отчёт за месяц</button></div>`;
+    <button class="${ui.salView === 'report' ? 'on' : ''}" data-act="salView" data-v="report">Отчёт</button>
+    <button class="${ui.salView === 'stats' ? 'on' : ''}" data-act="salView" data-v="stats">Итоги</button></div>`;
   if (ui.salView === 'report') return html + reportHtml();
+  if (ui.salView === 'stats') return html + statsHtml();
 
-  const rows = S.employees.map(e => ({ e, bal: balance(e.id), u: L.unpaid(S, e.id, tdy) }))
+  const rows = S.employees.map(e => ({ e, bal: balance(e.id), d: L.dueInfo(S, e, tdy, N) }))
     .filter(r => r.e.active !== false || Math.abs(r.bal) > 0.5);
   if (!rows.length) return html + `<div class="card empty">Добавьте сотрудников на вкладке «Люди»</div>`;
-  rows.sort((a, b) => (b.u.days >= N) - (a.u.days >= N) || b.bal - a.bal);
+  rows.sort((a, b) => (b.d.due - a.d.due) || b.bal - a.bal);
   const total = rows.reduce((s, r) => s + Math.max(0, r.bal), 0);
   const ym = tdy.slice(0, 7);
   const paidM = S.payments.filter(p => (p.type === 'pay' || p.type === 'adv') && p.date.startsWith(ym)).reduce((s, p) => s + p.amount, 0);
   html += `<div class="stat-grid"><div class="stat"><div class="k">Должен выплатить</div><div class="v">${money(total)}</div></div>
     <div class="stat"><div class="k">Выплачено в этом месяце</div><div class="v">${money(paidM)}</div></div></div>`;
-  html += `<div class="card">` + rows.map(({ e, bal, u }) => {
-    const due = u.days >= N;
+  const dim = L.daysInMonth(+tdy.slice(0, 4), +tdy.slice(5, 7));
+  html += `<div class="card">` + rows.map(({ e, bal, d }) => {
+    const due = d.due;
+    const sub = d.monthly
+      ? (due ? `<b style="color:var(--warn)">оклад по ${fmtShort(d.through)} — пора платить</b>` : `оклад ${money(rateNow(e))}/мес · начислено на сегодня`)
+      : (due ? `<b style="color:var(--warn)">${days(d.days)} — пора платить</b>` : `${d.days} из ${N} дн. до выплаты`);
+    const pct = due ? 100 : d.monthly ? +tdy.slice(8) / dim * 100 : d.days / N * 100;
     return `<div class="row tap" data-act="empDetail" data-emp="${e.id}">${avatar(e)}
       <div class="grow"><div class="name">${esc(e.name)}${e.active === false ? ' <span class="chip">уволен</span>' : ''}</div>
-        <div class="sub">${due ? `<b style="color:var(--warn)">${days(u.days)} — пора платить</b>` : `${u.days} из ${N} дн. до выплаты`}</div>
-        <div class="progress ${due ? 'due' : ''}"><i style="width:${Math.min(100, u.days / N * 100)}%"></i></div></div>
+        <div class="sub">${sub}</div>
+        <div class="progress ${due ? 'due' : ''}"><i style="width:${Math.min(100, pct)}%"></i></div></div>
       <div style="text-align:right"><div class="amt ${bal < 0 ? 'minus' : ''}">${money(bal)}</div>
-        ${bal > 0 ? `<button class="btn small ${due ? 'primary' : ''}" style="margin-top:4px" data-act="money" data-emp="${e.id}" data-type="pay">Выплатить</button>` : ''}</div></div>`;
+        ${bal >= 0.5 ? `<button class="btn small ${due ? 'primary' : ''}" style="margin-top:4px" data-act="money" data-emp="${e.id}" data-type="pay">Выплатить</button>` : ''}</div></div>`;
   }).join('') + '</div>';
   return html;
 }
@@ -263,13 +273,72 @@ function reportHtml() {
   let html = `<div class="navbar"><button class="iconbtn" data-act="month" data-d="-1">‹</button><div class="lbl">${monthLabel(ym)}</div><button class="iconbtn" data-act="month" data-d="1">›</button></div>`;
   if (!rows.length) return html + `<div class="card empty">За этот месяц нет данных</div>`;
   const t = rows.reduce((a, r) => (a.days += r.days, a.earned += r.earned, a.paid += r.paid, a.bonus += r.bonus, a.fine += r.fine, a), { days: 0, earned: 0, paid: 0, bonus: 0, fine: 0 });
-  html += `<div class="stat-grid"><div class="stat"><div class="k">Начислено за выходы</div><div class="v">${money(t.earned)}</div></div>
+  html += `<div class="stat-grid"><div class="stat"><div class="k">Начислено</div><div class="v">${money(t.earned)}</div></div>
     <div class="stat"><div class="k">Выплачено</div><div class="v">${money(t.paid)}</div></div></div>
     <div class="card">` + rows.map(r => `<div class="row tap" data-act="empDetail" data-emp="${r.emp.id}">
       <div class="grow"><div class="name">${esc(r.emp.name)}</div>
-      <div class="sub">${days(r.days)} · начислено ${money(r.earned)}${r.bonus ? ` · премии +${money(r.bonus)}` : ''}${r.fine ? ` · штрафы −${money(r.fine)}` : ''}${r.absent ? ` · прогулов ${r.absent}` : ''}</div></div>
+      <div class="sub">${r.monthly ? 'оклад' : days(r.days)} · начислено ${money(r.earned)}${r.bonus ? ` · премии +${money(r.bonus)}` : ''}${r.fine ? ` · штрафы −${money(r.fine)}` : ''}${r.absent ? ` · прогулов ${r.absent}` : ''}</div></div>
       <div style="text-align:right"><div class="amt">${money(r.paid)}</div><div class="sub">выплачено</div></div></div>`).join('') + '</div>' +
     `<button class="btn big flat" data-act="csvReport">Скачать отчёт (Excel)</button>`;
+  return html;
+}
+
+/* ================= Итоги по магазину ================= */
+const MON_SHORT = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+const niceMax = v => {
+  if (v <= 0) return 1000;
+  const p = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p;
+  return 10 * p;
+};
+const compact = n => n >= 1e6 ? nf.format(Math.round(n / 1e5) / 10) + ' млн' : n >= 1000 ? nf.format(Math.round(n / 100) / 10) + ' тыс' : String(Math.round(n));
+
+// Столбики: фонд оплаты труда по месяцам. Один ряд данных — одна краска, значение подписано только у выбранного месяца.
+function fotChart(series, sel) {
+  const top = niceMax(Math.max(0, ...series.map(s => s.fot)));
+  const cols = series.map(s => {
+    const on = s.ym === sel, pct = s.fot > 0 ? Math.max(s.fot / top * 100, 1.5) : 0;
+    return `<button class="col ${on ? 'on' : ''}" data-act="statMonth" data-ym="${s.ym}" aria-label="${monthLabel(s.ym)}: ${money(s.fot)}">
+      ${on && s.fot > 0 ? `<span class="val" style="bottom:calc(${pct}% + 4px)">${compact(s.fot)}</span>` : ''}<i class="bar" style="height:${pct}%"></i></button>`;
+  }).join('');
+  const grid = [0, 0.5, 1].map(f => `<div class="gl" style="bottom:${f * 100}%"><span>${f ? compact(top * f) : '0'}</span></div>`).join('');
+  const xl = series.map(s => `<span class="${s.ym === sel ? 'on' : ''}">${MON_SHORT[+s.ym.slice(5) - 1]}</span>`).join('');
+  return `<div class="chart"><div class="plot">${grid}<div class="cols">${cols}</div></div><div class="xlab">${xl}</div></div>`;
+}
+
+function statsHtml() {
+  const ym = ui.month, tdy = L.today(), cur = tdy.slice(0, 7), N = S.settings.perDay;
+  const st = L.storeStats(S, ym, tdy, N);
+  const end = ym < L.addMonths(cur, -5) ? L.addMonths(ym, 5) : cur;
+  const series = L.fotSeries(S, end, 6, tdy);
+  const debt = S.employees.reduce((s, e) => s + Math.max(0, balance(e.id)), 0);
+  const avg = st.elapsed ? nf.format(Math.round(st.avg * 10) / 10) + ' чел.' : '—';
+  let html = `<div class="navbar"><button class="iconbtn" data-act="month" data-d="-1">‹</button><div class="lbl">${monthLabel(ym)}<small>Итоги по магазину</small></div><button class="iconbtn" data-act="month" data-d="1">›</button></div>`;
+
+  html += `<div class="card pad"><div class="sub">Фонд оплаты труда</div><div class="hero">${money(st.fot)}</div>
+    <div class="sub">начислено ${money(st.earned)}${st.bonus ? ` · премии +${money(st.bonus)}` : ''}${st.fine ? ` · штрафы −${money(st.fine)}` : ''}</div></div>
+    <div class="stat-grid" style="margin-top:10px">
+      <div class="stat"><div class="k">Выплачено за месяц</div><div class="v">${money(st.paid)}</div></div>
+      <div class="stat"><div class="k">Должны сотрудникам сейчас</div><div class="v">${money(debt)}</div></div>
+      <div class="stat"><div class="k">Средняя явка в день</div><div class="v">${avg}</div><div class="sub">нужно ${N}</div></div>
+      <div class="stat"><div class="k">Дней с нехваткой людей</div><div class="v">${st.elapsed ? st.below + ' из ' + st.elapsed : '—'}</div><div class="sub">вышло меньше ${N}</div></div></div>`;
+
+  html += `<h3>Фонд оплаты труда по месяцам</h3><div class="card pad">${fotChart(series, ym)}
+    <details class="tbl"><summary>Показать таблицей</summary>${series.map(s => `<div class="hist"><div class="grow">${monthLabel(s.ym)}</div>
+      <div class="amt">${money(s.fot)}</div><div class="sub" style="min-width:104px;text-align:right">выплачено ${compact(s.paid)}</div></div>`).join('')}</details></div>`;
+
+  if (st.byPos.length) {
+    const mx = Math.max(...st.byPos.map(p => p.amount), 1);
+    html += `<h3>По должностям</h3><div class="card">` + st.byPos.map(p => `<div class="row"><div class="grow">
+      <div class="name">${esc(p.name)}</div><div class="sub">${p.staff} ${plural(p.staff, 'сотрудник', 'сотрудника', 'сотрудников')}${st.fot > 0 ? ' · ' + Math.round(p.amount / st.fot * 100) + '%' : ''}</div>
+      <div class="share"><i style="width:${Math.max(0, p.amount) / mx * 100}%"></i></div></div><div class="amt">${money(p.amount)}</div></div>`).join('') + '</div>';
+  }
+
+  html += `<h3>Пропуски · прогулы ${st.absent}, больничные ${st.sick}, отпуск ${st.vac}</h3>`;
+  html += st.absences.length
+    ? `<div class="card">` + st.absences.map(a => `<div class="row tap" data-act="empDetail" data-emp="${a.emp.id}"><div class="grow"><div class="name">${esc(a.emp.name)}</div></div>
+        <div>${a.absent ? `<span class="chip bad">прогулы ${a.absent}</span> ` : ''}${a.sick ? `<span class="chip warn">больничный ${a.sick}</span> ` : ''}${a.vac ? `<span class="chip info">отпуск ${a.vac}</span>` : ''}</div></div>`).join('') + '</div>'
+    : `<div class="card empty">В этом месяце пропусков нет</div>`;
   return html;
 }
 
@@ -288,7 +357,7 @@ function viewStaff() {
   const row = e => {
     const p = L.planned(e, tdy);
     return `<div class="row tap" data-act="editEmp" data-id="${e.id}">${avatar(e)}
-      <div class="grow"><div class="name">${esc(e.name)}</div><div class="sub">${esc(posName(e))} · ${schedLabel(e)} · ${money(rateNow(e))}/день</div></div>
+      <div class="grow"><div class="name">${esc(e.name)}</div><div class="sub">${esc(posName(e))} · ${schedLabel(e)} · ${rateLabel(e)}</div></div>
       ${p === true ? '<span class="chip ok">сегодня</span>' : p === false ? '<span class="chip">выходной</span>' : ''}</div>`;
   };
   html += `<h3>Работают (${act.length})</h3>` + (act.length ? `<div class="card">${act.map(row).join('')}</div>` : `<div class="card empty">Никого нет. Нажмите «+ Сотрудник».</div>`);
@@ -334,19 +403,20 @@ function dayMenu(empId, date) {
   openSheet(esc(e.name), `<div class="sub" style="margin:-4px 0 12px">${fmtLong(date)}${rec && rec.s === 'w' ? ` · ${money(rec.r)}` : ''}</div>
     <div class="card">` + Object.entries(ST).map(([k, v]) =>
       `<button class="menu-item" data-act="setDay" data-emp="${empId}" data-date="${date}" data-st="${k}"><span class="chip ${v.cls}" style="min-width:26px;text-align:center">${v.short}</span>
-      <div class="grow">${v.label}${k === 'w' ? ` <span class="sub">· ${money(rateNow(e))}</span>` : ''}</div>${cur === k ? '✓' : ''}</button>`).join('') +
+      <div class="grow">${v.label}${k === 'w' && !isMonthly(e) ? ` <span class="sub">· ${money(rateNow(e))}</span>` : ''}</div>${cur === k ? '✓' : ''}</button>`).join('') +
     `</div>${cur ? `<button class="btn big flat danger" data-act="setDay" data-emp="${empId}" data-date="${date}" data-st="">Снять отметку</button>` : ''}`);
 }
 
 function empDetail(empId) {
   const e = getEmp(empId); if (!e) return closeSheet();
-  const tdy = L.today(), bal = balance(empId), u = L.unpaid(S, empId, tdy);
+  const tdy = L.today(), bal = balance(empId), d = L.dueInfo(S, e, tdy, S.settings.payEvery);
   const ym = tdy.slice(0, 7);
   const mrow = L.monthReport(S, ym).find(r => r.emp.id === empId);
   const pays = S.payments.filter(p => p.empId === empId).sort((a, b) => b.date.localeCompare(a.date) || b.ts - a.ts);
-  openSheet(esc(e.name), `<div class="sub" style="margin:-4px 0 12px">${esc(posName(e))} · ${money(rateNow(e))}/день · ${schedLabel(e)}</div>
+  openSheet(esc(e.name), `<div class="sub" style="margin:-4px 0 12px">${esc(posName(e))} · ${rateLabel(e)} · ${schedLabel(e)}</div>
     <div class="stat-grid"><div class="stat"><div class="k">К выплате сейчас</div><div class="v" style="${bal < 0 ? 'color:var(--bad)' : ''}">${money(bal)}</div></div>
-      <div class="stat"><div class="k">Дней без выплаты</div><div class="v">${u.days}<span class="sub"> / ${S.settings.payEvery}</span></div></div>
+      ${d.monthly ? `<div class="stat"><div class="k">Оклад в месяц</div><div class="v">${money(rateNow(e))}</div></div>`
+        : `<div class="stat"><div class="k">Дней без выплаты</div><div class="v">${d.days}<span class="sub"> / ${S.settings.payEvery}</span></div></div>`}
       <div class="stat"><div class="k">В этом месяце вышел</div><div class="v">${mrow ? mrow.days : 0} дн.</div></div>
       <div class="stat"><div class="k">Начислено в месяце</div><div class="v">${money(mrow ? mrow.earned : 0)}</div></div></div>
     <div class="btn-row"><button class="btn primary" data-act="money" data-emp="${empId}" data-type="pay" data-back="1">Выплата</button>
@@ -356,7 +426,7 @@ function empDetail(empId) {
     <h3>История</h3>` + (pays.length ? `<div class="card pad" style="padding-top:4px;padding-bottom:4px">` + pays.map(p => {
       const sign = p.type === 'bonus' ? 'plus' : p.type === 'fine' ? 'minus' : '';
       return `<div class="hist"><div class="grow"><b>${p.type === 'pay' ? 'Выплата' : PAY_TYPES[p.type]}</b> · ${fmtShort(p.date)}
-        <div class="sub">${p.type === 'pay' && p.through ? 'за дни по ' + fmtShort(p.through) : ''}${p.note ? (p.type === 'pay' && p.through ? ' · ' : '') + esc(p.note) : ''}</div></div>
+        <div class="sub">${p.type === 'pay' && p.through ? 'закрыто по ' + fmtShort(p.through) : ''}${p.note ? (p.type === 'pay' && p.through ? ' · ' : '') + esc(p.note) : ''}</div></div>
         <div class="amt ${sign}">${p.type === 'bonus' ? '+' : p.type === 'fine' ? '−' : ''}${money(p.amount)}</div>
         <button class="x" data-act="delPay" data-id="${p.id}" data-emp="${empId}" aria-label="Удалить">✕</button></div>`;
     }).join('') + '</div>' : `<div class="card empty">Выплат пока не было</div>`) +
@@ -364,12 +434,14 @@ function empDetail(empId) {
 }
 
 function moneySheet(empId, type, back) {
-  const e = getEmp(empId), tdy = L.today(), bal = balance(empId), u = L.unpaid(S, empId, tdy);
+  const e = getEmp(empId), tdy = L.today(), bal = balance(empId);
+  const sg = L.payoutSuggest(S, e, tdy, S.settings.payEvery), d = sg.info;
   let amount = '', through = '', hint = '';
   if (type === 'pay') {
-    amount = Math.max(0, bal);
-    through = u.dates.length ? u.dates[u.dates.length - 1] : tdy;
-    hint = `Сейчас должны: <b>${money(bal)}</b>. Отработано без выплаты: ${days(u.days)} (${money(u.amount)}).`;
+    amount = Math.round(sg.amount); through = sg.through;
+    hint = d.monthly
+      ? `Оклад ${money(rateNow(e))}/мес. Начислено на сегодня: <b>${money(bal)}</b>. ${d.due ? `Предлагаю выплатить оклад по ${fmtShort(d.through)}: этот месяц уже закрыт.` : 'Месяц ещё не закончился: можно выплатить всё начисленное или часть.'}`
+      : `Сейчас должны: <b>${money(bal)}</b>. Отработано без выплаты: ${days(d.days)} (${money(d.amount)}).`;
   } else if (type === 'adv') hint = 'Аванс уменьшает сумму к выплате, но не закрывает рабочие дни.';
   else if (type === 'bonus') hint = 'Премия добавляется к сумме к выплате.';
   else hint = 'Штраф вычитается из суммы к выплате.';
@@ -377,7 +449,7 @@ function moneySheet(empId, type, back) {
     <div class="hint">${hint}</div>
     <label class="f">Сумма, ${esc(S.settings.currency)}<input name="amount" type="number" inputmode="decimal" step="any" min="0" required value="${amount}"></label>
     <div class="two"><label class="f">Дата<input name="date" type="date" required value="${tdy}"></label>
-    ${type === 'pay' ? `<label class="f">Закрывает дни по<input name="through" type="date" required value="${through}"></label>` : '<div></div>'}</div>
+    ${type === 'pay' ? `<label class="f">${d.monthly ? 'Закрывает оклад по' : 'Закрывает дни по'}<input name="through" type="date" required value="${through}"></label>` : '<div></div>'}</div>
     <label class="f">Комментарий (необязательно)<input name="note" type="text" maxlength="120"></label>
     <button class="btn primary big">Записать</button></form>`);
 }
@@ -395,8 +467,10 @@ function editEmp(id) {
   openSheet(isNew ? 'Новый сотрудник' : 'Сотрудник', `<form data-form="emp" data-id="${isNew ? '' : id}">
     <label class="f">ФИО<input name="name" required value="${esc(e.name)}" autocomplete="off"></label>
     <label class="f">Телефон<input name="phone" type="tel" value="${esc(e.phone)}"></label>
-    <label class="f">Должность<select name="positionId">${S.positions.map(p => `<option value="${p.id}" ${p.id === e.positionId ? 'selected' : ''}>${esc(p.name)} — ${money(p.rate)}/день</option>`).join('')}</select></label>
-    <label class="f">Своя ставка за день (если отличается от должности)<input name="rate" type="number" inputmode="decimal" step="any" min="0" value="${e.rate == null ? '' : e.rate}" placeholder="по должности"></label>
+    <label class="f">Должность<select name="positionId" data-role="pos">${S.positions.map(p => `<option value="${p.id}" data-pay="${p.pay || 'day'}" ${p.id === e.positionId ? 'selected' : ''}>${esc(p.name)} — ${money(p.rate)}${p.pay === 'month' ? '/мес' : '/день'}</option>`).join('')}</select></label>
+    <label class="f">Своя ставка (за день или оклад за месяц — как у должности), если отличается<input name="rate" type="number" inputmode="decimal" step="any" min="0" value="${e.rate == null ? '' : e.rate}" placeholder="по должности"></label>
+    <div id="payfrom-wrap" ${isMonthly(e) ? '' : 'hidden'}><label class="f">Начислять оклад с даты<input name="payFrom" type="date" value="${e.payFrom || L.today()}"></label>
+    <div class="hint">Оклад накапливается по дням с этой даты. Если раньше вы платили вне приложения, оставьте сегодняшнюю дату — прошлое не попадёт в долг.</div></div>
     <label class="f">График<select name="schedule" data-role="sched">${Object.keys(L.SCHEDULES).map(k => `<option value="${k}" ${k === e.schedule ? 'selected' : ''}>${k === 'free' ? 'Свободный (без графика)' : k}</option>`).join('')}</select></label>
     <label class="f">Где сотрудник в графике<select name="cycle">${cycleOptions(e.schedule, idx)}</select></label>
     <div class="hint">Чтобы каждый день выходило поровну, ставьте половине сотрудников «1-й рабочий день», а другой половине «1-й выходной» (для 2/2). Сколько человек по графику — видно на вкладке «Люди».</div>
@@ -407,20 +481,21 @@ function editEmp(id) {
 }
 
 function editPos(id) {
-  const isNew = id === 'new', p = isNew ? { name: '', rate: '' } : S.positions.find(x => x.id === id);
+  const isNew = id === 'new', p = isNew ? { name: '', rate: '', pay: 'day' } : S.positions.find(x => x.id === id);
   const used = S.employees.filter(e => e.positionId === id).length;
   openSheet(isNew ? 'Новая должность' : 'Должность', `<form data-form="pos" data-id="${isNew ? '' : id}">
     <label class="f">Название<input name="name" required value="${esc(p.name)}"></label>
-    <label class="f">Оплата за день, ${esc(S.settings.currency)}<input name="rate" type="number" inputmode="decimal" step="any" min="0" required value="${p.rate}"></label>
-    ${isNew ? '' : `<label class="f">Применить новую ставку к уже отмеченным дням начиная с<input name="from" type="date" value="${L.today()}"></label>
-    <div class="hint">${p.rate ? 'Дни до этой даты останутся по старой ставке.' : 'Ставка сейчас 0 — при сохранении пересчитаются все уже отмеченные дни.'}</div>`}
+    <label class="f">Как оплачивается<select name="pay"><option value="day" ${p.pay !== 'month' ? 'selected' : ''}>За каждый отработанный день</option><option value="month" ${p.pay === 'month' ? 'selected' : ''}>Фиксированный оклад за месяц</option></select></label>
+    <label class="f">Сумма, ${esc(S.settings.currency)} (за день или за месяц — по выбранному способу)<input name="rate" type="number" inputmode="decimal" step="any" min="0" required value="${p.rate}"></label>
+    ${isNew ? '' : `<label class="f">Изменения действуют с даты<input name="from" type="date" value="${L.today()}"></label>
+    <div class="hint">${p.rate ? 'За даты до этого дня останется прежняя сумма.' : 'Сумма сейчас 0 — при сохранении она применится ко всем уже отмеченным дням.'} Способ оплаты лучше не менять, когда по должности уже идут начисления.</div>`}
     <button class="btn primary big">Сохранить</button>
     ${isNew ? '' : `<button type="button" class="btn big flat danger" data-act="delPos" data-id="${id}">${used ? `Удалить (используется: ${used})` : 'Удалить'}</button>`}</form>`);
 }
 function positionsSheet() {
   openSheet('Должности и ставки', `<div class="card">${S.positions.map(p => `<button class="menu-item" data-act="editPos" data-id="${p.id}">
-    <div class="grow"><div>${esc(p.name)}</div><div class="sub">${S.employees.filter(e => e.positionId === p.id && e.active !== false).length} чел.</div></div>
-    <b class="amt" style="${p.rate ? '' : 'color:var(--warn)'}">${p.rate ? money(p.rate) + '/день' : 'указать ставку'}</b><span class="chev">›</span></button>`).join('')}</div>
+    <div class="grow"><div>${esc(p.name)}</div><div class="sub">${S.employees.filter(e => e.positionId === p.id && e.active !== false).length} чел.${p.pay === 'month' ? ' · оклад за месяц' : ''}</div></div>
+    <b class="amt" style="${p.rate ? '' : 'color:var(--warn)'}">${p.rate ? money(p.rate) + (p.pay === 'month' ? '/мес' : '/день') : 'указать ставку'}</b><span class="chev">›</span></button>`).join('')}</div>
     <button class="btn big primary" data-act="editPos" data-id="new">+ Должность</button>`);
 }
 
@@ -533,8 +608,8 @@ function importJson(text) {
 /* ================= Демо-данные ================= */
 function loadDemo() {
   if (S.employees.length && !confirm('Добавить демо-данные к существующим?')) return;
-  const rates = { 'Продавец': 1500, 'Кассир': 1600, 'Грузчик': 1400, 'Администратор': 2200, 'Уборщица': 1000 };
-  S.positions.forEach(p => { if (!p.rate && rates[p.name]) p.rate = rates[p.name]; });
+  const rates = { 'Продавец': 1500, 'Кассир': 1600, 'Грузчик': 1400, 'Администратор': 45000, 'Уборщица': 1000 };
+  S.positions.forEach(p => { if (!p.rate && rates[p.name]) p.rate = rates[p.name]; if (p.name === 'Администратор') p.pay = 'month'; });
   const P = n => (S.positions.find(p => p.name === n) || S.positions[0]).id;
   const tdy = L.today();
   const people = [['Иванова Мария', 'Продавец', '2/2', 0], ['Петров Алексей', 'Продавец', '2/2', 2], ['Сидорова Анна', 'Кассир', '2/2', 1],
@@ -542,7 +617,7 @@ function loadDemo() {
     ['Волкова Елена', 'Кассир', '2/2', 0], ['Новиков Сергей', 'Продавец', '3/3', 4], ['Фёдорова Ирина', 'Уборщица', '2/2', 1],
     ['Кузнецов Павел', 'Администратор', '6/1', 2]];
   const added = people.map(([name, pos, sched, idx]) => {
-    const e = { id: uid(), name, phone: '', positionId: P(pos), rate: null, schedule: sched, start: L.addDays(tdy, -idx), hired: L.addDays(tdy, -40), active: true };
+    const e = { id: uid(), name, phone: '', positionId: P(pos), rate: null, schedule: sched, start: L.addDays(tdy, -idx), hired: L.addDays(tdy, -40), payFrom: L.addDays(tdy, -40), active: true };
     S.employees.push(e); return e;
   });
   let seed = 7; const rnd = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
@@ -550,7 +625,7 @@ function loadDemo() {
     S.att[e.id] = {};
     for (let i = 20; i >= 1; i--) {
       const d = L.addDays(tdy, -i), p = L.planned(e, d);
-      if (p) S.att[e.id][d] = rnd() < 0.94 ? { s: 'w', r: rateNow(e) } : { s: 'a' };
+      if (p) S.att[e.id][d] = rnd() < 0.94 ? { s: 'w', r: L.dayRate(e, S.positions) } : { s: 'a' };
     }
   });
   added.slice(0, 5).forEach(e => {
@@ -621,6 +696,7 @@ const actions = {
   setDay: d => { if (setStatus(d.emp, d.date, d.st || null)) { closeSheet(); render(); } },
   month: d => { ui.month = L.addMonths(ui.month, +d.d); ui.matrixFresh = true; render(); },
   salView: d => { ui.salView = d.v; render(); },
+  statMonth: d => { ui.month = d.ym; render(); },
   empDetail: d => empDetail(d.emp),
   money: d => moneySheet(d.emp, d.type, d.back),
   delPay: d => {
@@ -682,28 +758,47 @@ const forms = {
       schedule: sched, start: L.SCHEDULES[sched] ? L.addDays(L.today(), -Number(fd.get('cycle') || 0)) : null,
       hired: fd.get('hired') || null, active: fd.get('active') === '1'
     };
+    const payFrom = fd.get('payFrom') || L.today();
+    let e;
     if (id) {
-      const e = getEmp(id), before = rateNow(e);
+      e = getEmp(id);
+      const beforeRate = rateNow(e), beforeM = isMonthly(e);
       Object.assign(e, data);
-      const after = rateNow(e);
-      if (after !== before) L.reprice(S, e, before === 0 ? '' : L.today());
+      const afterRate = rateNow(e), afterM = isMonthly(e);
+      if (afterM) {
+        if (!beforeM || e.payFrom == null) e.payFrom = payFrom;
+        else if (fd.get('payFrom')) e.payFrom = payFrom;
+        if (beforeM && afterRate !== beforeRate) L.addSalarySegment(e, L.today(), beforeRate);
+      }
+      if (afterRate !== beforeRate || afterM !== beforeM) L.reprice(S, e, beforeRate === 0 && afterM === beforeM ? '' : L.today());
     } else {
-      const e = Object.assign({ id: uid() }, data);
+      e = Object.assign({ id: uid() }, data);
+      if (isMonthly(e)) e.payFrom = payFrom;
       S.employees.push(e);
     }
+    if (!data.active) { if (!e.left) e.left = L.today(); } else e.left = null;
     save(); closeSheet(); render(); toast('Сохранено');
   },
   pos: f => {
     const fd = new FormData(f), id = f.dataset.id, name = fd.get('name').trim(), rate = Number(fd.get('rate'));
+    const pay = fd.get('pay') === 'month' ? 'month' : 'day';
     if (!name) return toast('Укажите название');
     if (id) {
-      const p = S.positions.find(x => x.id === id), old = Number(p.rate) || 0;
-      p.name = name; p.rate = rate;
-      if (rate !== old) {
-        const from = old === 0 ? '' : (fd.get('from') || L.today());
-        S.employees.filter(e => e.positionId === id && (e.rate === null || e.rate === undefined || e.rate === '')).forEach(e => L.reprice(S, e, from));
+      const p = S.positions.find(x => x.id === id), old = Number(p.rate) || 0, oldPay = p.pay || 'day';
+      const from = fd.get('from') || L.today(), payChanged = pay !== oldPay;
+      const affected = S.employees.filter(e => e.positionId === id);
+      const noOwnRate = e => e.rate === null || e.rate === undefined || e.rate === '';
+      if (payChanged && affected.length && !confirm(`Изменить способ оплаты у должности «${name}»? Это затронет сотрудников: ${affected.length}.` +
+        (oldPay === 'month' ? '\nНачисленный, но не выплаченный оклад пропадёт из расчёта — сначала выплатите его.' : ''))) return;
+      // прежний оклад сохраняем для прошлых дат
+      if (!payChanged && pay === 'month' && rate !== old) affected.filter(noOwnRate).forEach(e => L.addSalarySegment(e, from, old));
+      p.name = name; p.rate = rate; p.pay = pay;
+      if (payChanged && pay === 'month') affected.forEach(e => { e.payFrom = from; });
+      if (payChanged || rate !== old) {
+        const since = old === 0 && !payChanged ? '' : from;
+        (payChanged ? affected : affected.filter(noOwnRate)).forEach(e => L.reprice(S, e, since));
       }
-    } else S.positions.push({ id: uid(), name, rate });
+    } else S.positions.push({ id: uid(), name, rate, pay });
     save(); positionsSheet(); render();
   },
   money: f => {
@@ -742,6 +837,10 @@ document.addEventListener('submit', ev => {
 document.addEventListener('change', ev => {
   const t = ev.target;
   if (t.matches && t.matches('select[data-role="sched"]')) t.form.elements.cycle.innerHTML = cycleOptions(t.value, 0);
+  if (t.matches && t.matches('select[data-role="pos"]')) {
+    const w = $('#payfrom-wrap');
+    if (w) w.hidden = t.selectedOptions[0].dataset.pay !== 'month';
+  }
 });
 $('#logo-in').addEventListener('change', ev => {
   const file = ev.target.files[0]; ev.target.value = '';
