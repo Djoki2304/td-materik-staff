@@ -1,6 +1,8 @@
-// Офлайн-кэш: отдаём из кэша, в фоне обновляем — новая версия подхватится при следующем запуске.
-const CACHE = 'shopstaff-shell-v1';
-const FILES = ['./', 'index.html', 'style.css', 'logic.js', 'app.js', 'manifest.webmanifest',
+// Офлайн-кэш: сначала пробуем сеть (чтобы правки применялись сразу), кэш — только запасной
+// вариант офлайн. Старая версия (stale-while-revalidate) отдавала устаревший код при каждой
+// загрузке и обновляла кэш лишь в фоне — правки требовали двух перезапусков подряд.
+const CACHE = 'shopstaff-shell-v2';
+const FILES = ['./', 'index.html', 'style.css', 'logic.js', 'app.js', 'firebase-config.js', 'sync.js', 'manifest.webmanifest',
   'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -18,15 +20,12 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   e.respondWith(
-    caches.match(e.request, { ignoreSearch: true }).then(hit => {
-      const net = fetch(e.request).then(res => {
-        if (res && res.ok) {
-          const copy = res.clone();
-          caches.open(CACHE).then(c => c.put(e.request, copy));
-        }
-        return res;
-      }).catch(() => hit);
-      return hit || net;
-    })
+    fetch(e.request).then(res => {
+      if (res && res.ok) {
+        const copy = res.clone();
+        caches.open(CACHE).then(c => c.put(e.request, copy));
+      }
+      return res;
+    }).catch(() => caches.match(e.request, { ignoreSearch: true }))
   );
 });
