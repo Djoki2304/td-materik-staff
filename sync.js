@@ -102,12 +102,18 @@ const Cloud = {
       shopName: settings.shopName || '', currency: settings.currency || '₽', payEvery: settings.payEvery || 5
     }, { merge: true }));
   },
-  // Переносит текущее состояние (сотрудники/должности/настройки) в облако разово при входе.
-  // История табеля и выплат за прошлое НЕ переносится — синхронизируются только изменения с этого момента.
+  // Переносит текущее состояние в облако разово при входе — сотрудников, должности, настройки
+  // и ВСЮ накопленную историю табеля и выплат (например, с телефона, где приложением реально
+  // пользовались до этого), чтобы кабинет сотрудника и восстановление видели полную картину.
   fullSync(S) {
     S.positions.forEach(p => this.upsertPosition(p));
     S.employees.forEach(e => this.upsertEmployee(e));
     this.upsertConfig(S.settings);
+    for (const empId in S.att) {
+      const days = S.att[empId];
+      for (const date in days) this.setAttendance(empId, date, days[date].s, days[date].r);
+    }
+    S.payments.forEach(p => this.addPayment(p.empId, p));
   },
 
   // Обратный ход: восстанавливает локальный S из облака (например, после случайной очистки
