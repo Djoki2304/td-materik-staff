@@ -831,10 +831,9 @@ const forms = {
     save(); closeSheet(); render(); toast('Сохранено');
     if (window.Cloud) {
       const pin = (fd.get('empPin') || '').trim();
-      const oldPin = e.empPin || '';
-      (pin ? Cloud.ensureEmployeeAuth(e, pin, oldPin) : Promise.resolve(null))
+      (pin ? Cloud.ensureEmployeeAuth(e, pin) : Promise.resolve(null))
         .then(res => {
-          if (res) { e.empPin = pin; Object.assign(e, res); save(); }
+          if (res) { Object.assign(e, res); save(); }
           Cloud.upsertEmployee(e);
         })
         .catch(err => toast('Вход для сотрудника не настроен: ' + err.message));

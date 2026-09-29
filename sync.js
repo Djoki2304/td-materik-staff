@@ -11,6 +11,7 @@ const secondaryAuth = secondaryApp.auth();
 secondaryAuth.setPersistence(firebase.auth.Auth.Persistence.NONE).catch(() => {});
 const nowTs = () => firebase.firestore.FieldValue.serverTimestamp();
 const PUSH_ENDPOINT = 'https://td-materik-push.td-materik.workers.dev/send';
+const RESET_PIN_ENDPOINT = 'https://td-materik-push.td-materik.workers.dev/resetPin';
 
 let authUser = null, authReady = false;
 const authListeners = [];
@@ -154,12 +155,24 @@ const Cloud = {
     return { positions, employees, att, payments, settings };
   },
 
-  // Firebase не даёт сменить чужой пароль без Admin SDK/Cloud Functions (недоступны без Blaze-биллинга),
-  // поэтому единственный путь на чистом клиенте — временно войти под сотрудником через secondaryAuth,
-  // зная старый PIN. Если старый PIN на этом устройстве неизвестен (например, после восстановления
-  // резервной копии на новом телефоне) — сменить его отсюда нельзя, нужно удалить и создать заново
-  // (вручную, через консоль Firebase) — не покрыто в v1.
-  async ensureEmployeeAuth(emp, newPin, oldPin) {
+  // Прямой сброс пароля сотрудника через служебный аккаунт (Cloud Function недоступна без
+  // Blaze, поэтому это отдельный Worker-эндпоинт с сервисным ключом — см. td-materik-push-worker).
+  // Не требует старого PIN, работает с любого устройства, где выполнен вход админом.
+  async resetPin(authUid, newPin) {
+    if (!authUser) throw new Error('Нет входа в облако');
+    const token = await authUser.getIdToken();
+    const resp = await fetch(RESET_PIN_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ authUid, newPin }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data.ok === false) throw new Error('Сервис сброса PIN: ' + (data.error ? JSON.stringify(data.error) : resp.status));
+  },
+
+  // Для нового сотрудника — просто создаёт Auth-аккаунт (не требует прав админа, работает офлайн-first).
+  // Для уже существующего — сбрасывает пароль через Worker (resetPin), без необходимости знать старый PIN.
+  async ensureEmployeeAuth(emp, newPin) {
     if (!/^\d{6}$/.test(newPin || '')) throw new Error('PIN должен быть ровно 6 цифр');
     const authEmail = 'emp_' + emp.id + '@td-materik.internal';
     try {
@@ -168,12 +181,9 @@ const Cloud = {
       return { authUid: cred.user.uid, authEmail };
     } catch (err) {
       if (err.code !== 'auth/email-already-in-use') throw err;
-      if (!oldPin) throw new Error('Старый PIN неизвестен на этом устройстве — смена недоступна');
-      const cred = await secondaryAuth.signInWithEmailAndPassword(authEmail, oldPin);
-      await cred.user.updatePassword(newPin);
-      const authUid = cred.user.uid;
-      await secondaryAuth.signOut();
-      return { authUid, authEmail };
+      if (!emp.authUid) throw new Error('У сотрудника ещё нет authUid локально — откройте карточку после синхронизации и повторите');
+      await this.resetPin(emp.authUid, newPin);
+      return { authUid: emp.authUid, authEmail };
     }
   }
 };
