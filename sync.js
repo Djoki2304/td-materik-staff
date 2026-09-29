@@ -131,18 +131,19 @@ const Cloud = {
   // данных браузера — localStorage и IndexedDB общие для всех страниц одного домена, так что
   // очистка сайта задевает оба приложения сразу, хотя ломает по факту только это, локальное).
   async pullAll() {
+    const tag = (label, p) => p.catch(err => { throw new Error(label + ': ' + ((err && err.message) || err)); });
     const [posSnap, empSnap, cfgDoc] = await Promise.all([
-      db.collection('positions').get(),
-      db.collection('employees').get(),
-      db.collection('config').doc('public').get()
+      tag('positions', db.collection('positions').get()),
+      tag('employees', db.collection('employees').get()),
+      tag('config', db.collection('config').doc('public').get())
     ]);
     const positions = posSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     const employees = empSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     const att = {}, payments = [];
     await Promise.all(employees.map(async e => {
       const [attSnap, paySnap] = await Promise.all([
-        db.collection('employees').doc(e.id).collection('attendance').get(),
-        db.collection('employees').doc(e.id).collection('payments').get()
+        tag('attendance/' + e.name, db.collection('employees').doc(e.id).collection('attendance').get()),
+        tag('payments/' + e.name, db.collection('employees').doc(e.id).collection('payments').get())
       ]);
       const empAtt = {};
       attSnap.forEach(d => { const v = d.data(); empAtt[d.id] = { s: v.status, r: v.rate }; });

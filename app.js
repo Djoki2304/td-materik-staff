@@ -770,7 +770,7 @@ const actions = {
       if (cloud.settings.payEvery) S.settings.payEvery = cloud.settings.payEvery;
       save(); render(); settingsSheet();
       toast('Восстановлено: ' + cloud.employees.length + ' сотрудников');
-    } catch (err) { toast('Не удалось восстановить: ' + err.message); }
+    } catch (err) { alert('Не удалось восстановить: ' + err.message); }
   },
   setPin: pinSheet,
   clearPin: () => { if (confirm('Отключить PIN-код?')) { S.settings.pinHash = null; save(); settingsSheet(); toast('PIN отключён'); } },
