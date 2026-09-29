@@ -12,3 +12,6 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 // Второй экземпляр — чтобы создание/смена входа сотрудника не обрывала сессию администратора.
 const secondaryApp = firebase.initializeApp(firebaseConfig, "Secondary");
+// Safari/WebKit's default streaming transport trips a known Firestore SDK bug
+// ("INTERNAL ASSERTION FAILED: Unexpected state") — long-polling avoids it.
+firebase.firestore().settings({ experimentalAutoDetectLongPolling: true });
