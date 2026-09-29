@@ -85,6 +85,7 @@ function setStatus(empId, date, st) {
   else if (st === 'w') a[date] = { s: 'w', r: cur && cur.s === 'w' ? cur.r : L.dayRate(e, S.positions) };
   else a[date] = { s: st };
   save();
+  if (window.Cloud) Cloud.setAttendance(empId, date, st || null, a[date] ? a[date].r : null);
   return true;
 }
 const balance = id => L.balanceOf(S, id);
@@ -467,6 +468,7 @@ function editEmp(id) {
   openSheet(isNew ? 'Новый сотрудник' : 'Сотрудник', `<form data-form="emp" data-id="${isNew ? '' : id}">
     <label class="f">ФИО<input name="name" required value="${esc(e.name)}" autocomplete="off"></label>
     <label class="f">Телефон<input name="phone" type="tel" value="${esc(e.phone)}"></label>
+    <label class="f">${e.authUid ? 'Сменить PIN для входа в приложение сотрудника' : 'PIN для входа в приложение сотрудника (необязательно)'}<input name="empPin" type="text" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" placeholder="${e.authUid ? 'оставьте пустым, чтобы не менять' : 'ровно 6 цифр'}"></label>
     <label class="f">Должность<select name="positionId" data-role="pos">${S.positions.map(p => `<option value="${p.id}" data-pay="${p.pay || 'day'}" ${p.id === e.positionId ? 'selected' : ''}>${esc(p.name)} — ${money(p.rate)}${p.pay === 'month' ? '/мес' : '/день'}</option>`).join('')}</select></label>
     <label class="f">Своя ставка (за день или оклад за месяц — как у должности), если отличается<input name="rate" type="number" inputmode="decimal" step="any" min="0" value="${e.rate == null ? '' : e.rate}" placeholder="по должности"></label>
     <div id="payfrom-wrap" ${isMonthly(e) ? '' : 'hidden'}><label class="f">Начислять оклад с даты<input name="payFrom" type="date" value="${e.payFrom || L.today()}"></label>
@@ -522,6 +524,17 @@ function setLogo(file) {
   img.src = url;
 }
 
+function cloudSectionHtml() {
+  if (!window.Cloud) return '';
+  const u = Cloud.user;
+  return `<h3>Облако (кабинет сотрудника)</h3><div class="card pad">` + (u
+    ? `<div class="sub">Вход выполнен: <b>${esc(u.email)}</b></div>
+       <div class="hint" style="margin-top:8px">Ваш ID администратора (одноразово скопируйте в Firestore → создайте документ <code>admins/${esc(u.uid)}</code>, чтобы разрешить синхронизацию):</div>
+       <div class="hint" style="user-select:all;word-break:break-all"><b>${esc(u.uid)}</b></div>
+       <button class="btn small flat" style="margin-top:8px" data-act="cloudLogout">Выйти из облака</button>`
+    : `<div class="sub">Вход не выполнен — синхронизация с приложением сотрудника не работает.</div>
+       <button class="btn small primary" style="margin-top:8px" data-act="cloudLogin">Войти в облако</button>`) + `</div>`;
+}
 function settingsSheet() {
   const s = S.settings;
   openSheet('Настройки', `<form data-form="settings">
@@ -532,7 +545,15 @@ function settingsSheet() {
     <h3>Защита</h3><div class="card">
     <button class="menu-item" data-act="setPin"><div class="grow">${s.pinHash ? 'Сменить PIN-код' : 'Включить PIN-код'}</div><span class="chev">›</span></button>
     ${s.pinHash ? `<button class="menu-item" data-act="clearPin"><div class="grow" style="color:var(--bad)">Отключить PIN-код</div></button>` : ''}</div>
-    <div class="sub" style="margin:8px 4px">PIN закрывает приложение на экране. Он не шифрует данные — для сохранности используйте резервные копии.</div>`);
+    <div class="sub" style="margin:8px 4px">PIN закрывает приложение на экране. Он не шифрует данные — для сохранности используйте резервные копии.</div>
+    ${cloudSectionHtml()}`);
+}
+function cloudLoginSheet() {
+  openSheet('Вход в облако', `<div class="hint">Один раз войдите под своим email — это разрешит синхронизацию с приложением сотрудника. Если аккаунта ещё нет, он будет создан автоматически.</div>
+    <form data-form="cloudLogin">
+    <label class="f">Email<input name="email" type="email" required autocomplete="username"></label>
+    <label class="f">Пароль (минимум 6 символов)<input name="password" type="password" required minlength="6" autocomplete="current-password"></label>
+    <button class="btn primary big">Войти</button></form>`);
 }
 function pinSheet() {
   openSheet('PIN-код', `<form data-form="pin"><label class="f">Новый PIN (4 цифры)<input name="p1" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label>
@@ -702,6 +723,7 @@ const actions = {
   delPay: d => {
     if (!confirm('Удалить эту запись?')) return;
     S.payments = S.payments.filter(p => p.id !== d.id); save(); empDetail(d.emp); render();
+    if (window.Cloud) Cloud.deleteMoneyRecord(d.emp, d.id);
   },
   editEmp: d => editEmp(d.id),
   delEmp: d => {
@@ -709,6 +731,7 @@ const actions = {
     if (!confirm(`Удалить «${e.name}» вместе со всеми отметками и выплатами?\nЕсли человек просто ушёл — лучше поставьте статус «Уволен».`)) return;
     S.employees = S.employees.filter(x => x.id !== d.id); delete S.att[d.id];
     S.payments = S.payments.filter(p => p.empId !== d.id); save(); closeSheet(); render();
+    if (window.Cloud) Cloud.deleteEmployee(d.id);
   },
   branding: brandingSheet,
   pickLogo: () => $('#logo-in').click(),
@@ -719,8 +742,11 @@ const actions = {
     if (S.employees.some(e => e.positionId === d.id)) return toast('Должность используется сотрудниками');
     if (!confirm('Удалить должность?')) return;
     S.positions = S.positions.filter(p => p.id !== d.id); save(); positionsSheet(); render();
+    if (window.Cloud) Cloud.deletePosition(d.id);
   },
   settings: settingsSheet,
+  cloudLogin: cloudLoginSheet,
+  cloudLogout: () => { Cloud.signOut().then(() => { toast('Вы вышли из облака'); settingsSheet(); }); },
   setPin: pinSheet,
   clearPin: () => { if (confirm('Отключить PIN-код?')) { S.settings.pinHash = null; save(); settingsSheet(); toast('PIN отключён'); } },
   backup: backupSheet,
@@ -778,11 +804,22 @@ const forms = {
     }
     if (!data.active) { if (!e.left) e.left = L.today(); } else e.left = null;
     save(); closeSheet(); render(); toast('Сохранено');
+    if (window.Cloud) {
+      const pin = (fd.get('empPin') || '').trim();
+      const oldPin = e.empPin || '';
+      (pin ? Cloud.ensureEmployeeAuth(e, pin, oldPin) : Promise.resolve(null))
+        .then(res => {
+          if (res) { e.empPin = pin; Object.assign(e, res); save(); }
+          Cloud.upsertEmployee(e);
+        })
+        .catch(err => toast('Вход для сотрудника не настроен: ' + err.message));
+    }
   },
   pos: f => {
     const fd = new FormData(f), id = f.dataset.id, name = fd.get('name').trim(), rate = Number(fd.get('rate'));
     const pay = fd.get('pay') === 'month' ? 'month' : 'day';
     if (!name) return toast('Укажите название');
+    let posObj;
     if (id) {
       const p = S.positions.find(x => x.id === id), old = Number(p.rate) || 0, oldPay = p.pay || 'day';
       const from = fd.get('from') || L.today(), payChanged = pay !== oldPay;
@@ -798,14 +835,22 @@ const forms = {
         const since = old === 0 && !payChanged ? '' : from;
         (payChanged ? affected : affected.filter(noOwnRate)).forEach(e => L.reprice(S, e, since));
       }
-    } else S.positions.push({ id: uid(), name, rate, pay });
+      posObj = p;
+    } else { posObj = { id: uid(), name, rate, pay }; S.positions.push(posObj); }
     save(); positionsSheet(); render();
+    if (window.Cloud) Cloud.upsertPosition(posObj);
   },
   money: f => {
     const fd = new FormData(f), { emp, type, back } = f.dataset, amount = Number(fd.get('amount'));
     if (!(amount > 0)) return toast('Введите сумму');
-    S.payments.push({ id: uid(), empId: emp, type, amount, date: fd.get('date'), through: type === 'pay' ? fd.get('through') : null, note: (fd.get('note') || '').trim(), ts: Date.now() });
+    const rec = { id: uid(), empId: emp, type, amount, date: fd.get('date'), through: type === 'pay' ? fd.get('through') : null, note: (fd.get('note') || '').trim(), ts: Date.now() };
+    S.payments.push(rec);
     save(); render();
+    if (window.Cloud) {
+      Cloud.addPayment(emp, rec);
+      const title = type === 'pay' ? 'Зарплата выплачена' : type === 'bonus' ? 'Начислена премия' : type === 'fine' ? 'Начислен штраф' : 'Новая запись';
+      Cloud.notify(emp, title, money(amount) + (rec.note ? ' · ' + rec.note : ''));
+    }
     if (type === 'pay' && amount < balance(emp) - 0.01) toast('Записано. Остаток: ' + money(balance(emp)));
     else toast('Записано');
     if (back) empDetail(emp); else closeSheet();
@@ -813,6 +858,7 @@ const forms = {
   brand: f => {
     S.settings.shopName = new FormData(f).get('shopName').trim() || 'Магазин';
     save(); brandingSheet(); render(); toast('Сохранено');
+    if (window.Cloud) Cloud.upsertConfig(S.settings);
   },
   settings: f => {
     const fd = new FormData(f);
@@ -820,12 +866,21 @@ const forms = {
     S.settings.payEvery = Math.max(1, parseInt(fd.get('payEvery'), 10) || 5);
     S.settings.perDay = Math.max(1, parseInt(fd.get('perDay'), 10) || 10);
     save(); closeSheet(); render(); toast('Сохранено');
+    if (window.Cloud) Cloud.upsertConfig(S.settings);
   },
   pin: async f => {
     const fd = new FormData(f), p1 = fd.get('p1'), p2 = fd.get('p2');
     if (!/^\d{4}$/.test(p1)) return toast('PIN — ровно 4 цифры');
     if (p1 !== p2) return toast('PIN не совпадает');
     S.settings.pinHash = await hashPin(p1); save(); settingsSheet(); toast('PIN включён');
+  },
+  cloudLogin: f => {
+    const fd = new FormData(f), email = fd.get('email').trim(), password = fd.get('password');
+    Cloud.signIn(email, password)
+      .catch(err => (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential')
+        ? firebase.auth().createUserWithEmailAndPassword(email, password) : Promise.reject(err))
+      .then(() => { closeSheet(); toast('Вход выполнен'); settingsSheet(); })
+      .catch(err => toast('Ошибка входа: ' + err.message));
   }
 };
 document.addEventListener('submit', ev => {
@@ -859,6 +914,13 @@ render();
 showLock();
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+if (window.Cloud) {
+  let cloudSyncedOnce = false;
+  Cloud.onAuthChange(u => {
+    if (!u && !S.meta.cloudPromptShown) { S.meta.cloudPromptShown = true; save(); cloudLoginSheet(); }
+    if (u && !cloudSyncedOnce) { cloudSyncedOnce = true; Cloud.fullSync(S); }
+  });
 }
 window.__app = { get S() { return S; }, ui, render, actions, forms };
 })();
