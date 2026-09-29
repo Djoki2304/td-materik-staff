@@ -110,6 +110,32 @@ const Cloud = {
     this.upsertConfig(S.settings);
   },
 
+  // Обратный ход: восстанавливает локальный S из облака (например, после случайной очистки
+  // данных браузера — localStorage и IndexedDB общие для всех страниц одного домена, так что
+  // очистка сайта задевает оба приложения сразу, хотя ломает по факту только это, локальное).
+  async pullAll() {
+    const [posSnap, empSnap, cfgDoc] = await Promise.all([
+      db.collection('positions').get(),
+      db.collection('employees').get(),
+      db.collection('config').doc('public').get()
+    ]);
+    const positions = posSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const employees = empSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const att = {}, payments = [];
+    await Promise.all(employees.map(async e => {
+      const [attSnap, paySnap] = await Promise.all([
+        db.collection('employees').doc(e.id).collection('attendance').get(),
+        db.collection('employees').doc(e.id).collection('payments').get()
+      ]);
+      const empAtt = {};
+      attSnap.forEach(d => { const v = d.data(); empAtt[d.id] = { s: v.status, r: v.rate }; });
+      if (Object.keys(empAtt).length) att[e.id] = empAtt;
+      paySnap.forEach(d => { const v = d.data(); payments.push({ id: d.id, empId: e.id, ...v, ts: v.createdAt ? v.createdAt.toMillis() : Date.now() }); });
+    }));
+    const settings = cfgDoc.exists ? cfgDoc.data() : {};
+    return { positions, employees, att, payments, settings };
+  },
+
   // Firebase не даёт сменить чужой пароль без Admin SDK/Cloud Functions (недоступны без Blaze-биллинга),
   // поэтому единственный путь на чистом клиенте — временно войти под сотрудником через secondaryAuth,
   // зная старый PIN. Если старый PIN на этом устройстве неизвестен (например, после восстановления

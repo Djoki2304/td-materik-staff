@@ -531,7 +531,8 @@ function cloudSectionHtml() {
     ? `<div class="sub">Вход выполнен: <b>${esc(u.email)}</b></div>
        <div class="hint" style="margin-top:8px">Ваш ID администратора (одноразово скопируйте в Firestore → создайте документ <code>admins/${esc(u.uid)}</code>, чтобы разрешить синхронизацию):</div>
        <div class="hint" style="user-select:all;word-break:break-all"><b>${esc(u.uid)}</b></div>
-       <button class="btn small flat" style="margin-top:8px" data-act="cloudLogout">Выйти из облака</button>`
+       <button class="btn small flat" style="margin-top:8px" data-act="cloudLogout">Выйти из облака</button>
+       <button class="btn small flat" style="margin-top:8px" data-act="cloudRestore">Восстановить данные из облака</button>`
     : `<div class="sub">Вход не выполнен — синхронизация с приложением сотрудника не работает.</div>
        <button class="btn small primary" style="margin-top:8px" data-act="cloudLogin">Войти в облако</button>`) + `</div>`;
 }
@@ -747,6 +748,22 @@ const actions = {
   settings: settingsSheet,
   cloudLogin: cloudLoginSheet,
   cloudLogout: () => { Cloud.signOut().then(() => { toast('Вы вышли из облака'); settingsSheet(); }); },
+  cloudRestore: async () => {
+    if (!confirm('Заменить локальные данные на этом устройстве данными из облака? Текущие несинхронизированные локальные изменения будут потеряны.')) return;
+    toast('Восстанавливаю…');
+    try {
+      const cloud = await Cloud.pullAll();
+      S.positions = cloud.positions.length ? cloud.positions : S.positions;
+      S.employees = cloud.employees;
+      S.att = cloud.att;
+      S.payments = cloud.payments;
+      if (cloud.settings.shopName) S.settings.shopName = cloud.settings.shopName;
+      if (cloud.settings.currency) S.settings.currency = cloud.settings.currency;
+      if (cloud.settings.payEvery) S.settings.payEvery = cloud.settings.payEvery;
+      save(); render(); settingsSheet();
+      toast('Восстановлено: ' + cloud.employees.length + ' сотрудников');
+    } catch (err) { toast('Не удалось восстановить: ' + err.message); }
+  },
   setPin: pinSheet,
   clearPin: () => { if (confirm('Отключить PIN-код?')) { S.settings.pinHash = null; save(); settingsSheet(); toast('PIN отключён'); } },
   backup: backupSheet,
