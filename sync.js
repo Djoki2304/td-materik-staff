@@ -4,11 +4,6 @@
 'use strict';
 const auth = firebase.auth();
 const db = firebase.firestore();
-const secondaryAuth = secondaryApp.auth();
-// Без этого secondaryAuth иногда перезаписывает сохранённую сессию основного admin-логина
-// в общем хранилище браузера (собственный баг Firebase JS SDK для именованных app-инстансов),
-// из-за чего запросы к Firestore внезапно уходят от имени только что созданного сотрудника.
-secondaryAuth.setPersistence(firebase.auth.Auth.Persistence.NONE).catch(() => {});
 const nowTs = () => firebase.firestore.FieldValue.serverTimestamp();
 const PUSH_ENDPOINT = 'https://td-materik-push.td-materik.workers.dev/send';
 const RESET_PIN_ENDPOINT = 'https://td-materik-push.td-materik.workers.dev/resetPin';
@@ -155,36 +150,23 @@ const Cloud = {
     return { positions, employees, att, payments, settings };
   },
 
-  // Прямой сброс пароля сотрудника через служебный аккаунт (Cloud Function недоступна без
-  // Blaze, поэтому это отдельный Worker-эндпоинт с сервисным ключом — см. td-materik-push-worker).
-  // Не требует старого PIN, работает с любого устройства, где выполнен вход админом.
-  async resetPin(authUid, newPin) {
+  // Создание и сброс PIN сотрудника — оба через один и тот же Worker-эндпоинт с сервисным
+  // ключом (см. td-materik-push-worker): он сам находит аккаунт по email через Identity Toolkit
+  // и либо создаёт, либо сбрасывает пароль. Так надёжнее клиентского secondaryAuth-варианта —
+  // не зависит от того, есть ли у ЭТОГО устройства локально сохранённый authUid/старый PIN.
+  async ensureEmployeeAuth(emp, newPin) {
+    if (!/^\d{6}$/.test(newPin || '')) throw new Error('PIN должен быть ровно 6 цифр');
     if (!authUser) throw new Error('Нет входа в облако');
+    const authEmail = 'emp_' + emp.id + '@td-materik.internal';
     const token = await authUser.getIdToken();
     const resp = await fetch(RESET_PIN_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
-      body: JSON.stringify({ authUid, newPin }),
+      body: JSON.stringify({ authEmail, newPin }),
     });
     const data = await resp.json().catch(() => ({}));
-    if (!resp.ok || data.ok === false) throw new Error('Сервис сброса PIN: ' + (data.error ? JSON.stringify(data.error) : resp.status));
-  },
-
-  // Для нового сотрудника — просто создаёт Auth-аккаунт (не требует прав админа, работает офлайн-first).
-  // Для уже существующего — сбрасывает пароль через Worker (resetPin), без необходимости знать старый PIN.
-  async ensureEmployeeAuth(emp, newPin) {
-    if (!/^\d{6}$/.test(newPin || '')) throw new Error('PIN должен быть ровно 6 цифр');
-    const authEmail = 'emp_' + emp.id + '@td-materik.internal';
-    try {
-      const cred = await secondaryAuth.createUserWithEmailAndPassword(authEmail, newPin);
-      await secondaryAuth.signOut();
-      return { authUid: cred.user.uid, authEmail };
-    } catch (err) {
-      if (err.code !== 'auth/email-already-in-use') throw err;
-      if (!emp.authUid) throw new Error('У сотрудника ещё нет authUid локально — откройте карточку после синхронизации и повторите');
-      await this.resetPin(emp.authUid, newPin);
-      return { authUid: emp.authUid, authEmail };
-    }
+    if (!resp.ok || data.ok === false) throw new Error('Сервис PIN: ' + (data.error ? JSON.stringify(data.error) : resp.status));
+    return { authUid: data.authUid, authEmail };
   }
 };
 
