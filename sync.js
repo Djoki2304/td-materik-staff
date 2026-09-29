@@ -20,7 +20,11 @@ auth.onAuthStateChanged(u => {
 });
 
 function safe(promise) {
-  return promise.catch(err => console.warn('[cloud]', (err && err.message) || err));
+  return promise.then(() => ({ ok: true })).catch(err => {
+    const msg = (err && err.message) || String(err);
+    console.warn('[cloud]', msg);
+    return { ok: false, err: msg };
+  });
 }
 
 const Cloud = {
@@ -105,15 +109,22 @@ const Cloud = {
   // Переносит текущее состояние в облако разово при входе — сотрудников, должности, настройки
   // и ВСЮ накопленную историю табеля и выплат (например, с телефона, где приложением реально
   // пользовались до этого), чтобы кабинет сотрудника и восстановление видели полную картину.
-  fullSync(S) {
-    S.positions.forEach(p => this.upsertPosition(p));
-    S.employees.forEach(e => this.upsertEmployee(e));
-    this.upsertConfig(S.settings);
+  // Возвращает сводку (сколько прошло/упало), чтобы можно было показать результат прямо на
+  // экране телефона — консоль там не посмотришь.
+  async fullSync(S) {
+    const results = [];
+    results.push(...await Promise.all(S.positions.map(p => this.upsertPosition(p))));
+    results.push(...await Promise.all(S.employees.map(e => this.upsertEmployee(e))));
+    results.push(await this.upsertConfig(S.settings));
+    const attJobs = [];
     for (const empId in S.att) {
       const days = S.att[empId];
-      for (const date in days) this.setAttendance(empId, date, days[date].s, days[date].r);
+      for (const date in days) attJobs.push(this.setAttendance(empId, date, days[date].s, days[date].r));
     }
-    S.payments.forEach(p => this.addPayment(p.empId, p));
+    results.push(...await Promise.all(attJobs));
+    results.push(...await Promise.all(S.payments.map(p => this.addPayment(p.empId, p))));
+    const failed = results.filter(r => r && r.ok === false);
+    return { total: results.length, failed: failed.length, firstError: failed[0] && failed[0].err };
   },
 
   // Обратный ход: восстанавливает локальный S из облака (например, после случайной очистки

@@ -749,11 +749,12 @@ const actions = {
   settings: settingsSheet,
   cloudLogin: cloudLoginSheet,
   cloudLogout: () => { Cloud.signOut().then(() => { toast('Вы вышли из облака'); settingsSheet(); }); },
-  cloudPush: () => {
+  cloudPush: async () => {
     if (!confirm('Отправить всех сотрудников, весь табель и все выплаты в облако? Это перезапишет данные в облаке текущими локальными.')) return;
     toast('Отправляю…');
-    Cloud.fullSync(S);
-    setTimeout(() => toast('Готово, отправлено в облако'), 1500);
+    const res = await Cloud.fullSync(S);
+    alert('Отправлено: ' + (res.total - res.failed) + ' из ' + res.total + '.' +
+      (res.failed ? '\nОшибок: ' + res.failed + '\nПример ошибки: ' + res.firstError : '\nВсё без ошибок.'));
   },
   cloudRestore: async () => {
     if (!confirm('Заменить локальные данные на этом устройстве данными из облака? Текущие несинхронизированные локальные изменения будут потеряны.')) return;
