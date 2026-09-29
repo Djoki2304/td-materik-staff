@@ -531,6 +531,7 @@ function cloudSectionHtml() {
     ? `<div class="sub">Вход выполнен: <b>${esc(u.email)}</b></div>
        <div class="hint" style="margin-top:8px">Ваш ID администратора (одноразово скопируйте в Firestore → создайте документ <code>admins/${esc(u.uid)}</code>, чтобы разрешить синхронизацию):</div>
        <div class="hint" style="user-select:all;word-break:break-all"><b>${esc(u.uid)}</b></div>
+       <button class="btn small flat" style="margin-top:8px" data-act="cloudPush">Отправить все данные в облако</button>
        <button class="btn small flat" style="margin-top:8px" data-act="cloudLogout">Выйти из облака</button>
        <button class="btn small flat" style="margin-top:8px" data-act="cloudRestore">Восстановить данные из облака</button>`
     : `<div class="sub">Вход не выполнен — синхронизация с приложением сотрудника не работает.</div>
@@ -748,6 +749,12 @@ const actions = {
   settings: settingsSheet,
   cloudLogin: cloudLoginSheet,
   cloudLogout: () => { Cloud.signOut().then(() => { toast('Вы вышли из облака'); settingsSheet(); }); },
+  cloudPush: () => {
+    if (!confirm('Отправить всех сотрудников, весь табель и все выплаты в облако? Это перезапишет данные в облаке текущими локальными.')) return;
+    toast('Отправляю…');
+    Cloud.fullSync(S);
+    setTimeout(() => toast('Готово, отправлено в облако'), 1500);
+  },
   cloudRestore: async () => {
     if (!confirm('Заменить локальные данные на этом устройстве данными из облака? Текущие несинхронизированные локальные изменения будут потеряны.')) return;
     toast('Восстанавливаю…');
