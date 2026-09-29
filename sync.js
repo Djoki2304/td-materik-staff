@@ -5,6 +5,10 @@
 const auth = firebase.auth();
 const db = firebase.firestore();
 const secondaryAuth = secondaryApp.auth();
+// Без этого secondaryAuth иногда перезаписывает сохранённую сессию основного admin-логина
+// в общем хранилище браузера (собственный баг Firebase JS SDK для именованных app-инстансов),
+// из-за чего запросы к Firestore внезапно уходят от имени только что созданного сотрудника.
+secondaryAuth.setPersistence(firebase.auth.Auth.Persistence.NONE).catch(() => {});
 const nowTs = () => firebase.firestore.FieldValue.serverTimestamp();
 const PUSH_ENDPOINT = 'https://td-materik-push.td-materik.workers.dev/send';
 
