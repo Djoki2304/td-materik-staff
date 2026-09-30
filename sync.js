@@ -29,18 +29,21 @@ const Cloud = {
   signIn(email, password) { return auth.signInWithEmailAndPassword(email, password); },
   signOut() { return auth.signOut(); },
 
+  // authUid/authEmail НЕ включены сюда намеренно: если у этого устройства локально нет
+  // (или устарело) значение, обычное сохранение карточки — с другого устройства, где PIN
+  // настраивали позже, — затирало бы уже настроенный вход обратно в null. Эти два поля
+  // пишет только ensureEmployeeAuth/resetPin, больше никто.
   upsertEmployee(e) {
     const data = {
       name: e.name, phone: e.phone || '', positionId: e.positionId || null,
       schedule: e.schedule || null, start: e.start || null, hired: e.hired || null,
       payFrom: e.payFrom || null, left: e.left || null, salHist: e.salHist || null,
       rate: e.rate == null ? null : Number(e.rate), active: e.active !== false,
-      authUid: e.authUid || null, authEmail: e.authEmail || null,
       updatedAt: nowTs()
     };
     return safe(Promise.all([
       db.collection('employees').doc(e.id).set(data, { merge: true }),
-      db.collection('directory').doc(e.id).set({ name: e.name, authEmail: e.authEmail || null }, { merge: true })
+      db.collection('directory').doc(e.id).set({ name: e.name }, { merge: true })
     ]));
   },
 
@@ -166,7 +169,16 @@ const Cloud = {
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok || data.ok === false) throw new Error('Сервис PIN: ' + (data.error ? JSON.stringify(data.error) : resp.status));
-    return { authUid: data.authUid, authEmail };
+    const authUid = data.authUid;
+    // Пишем сразу отсюда (не полагаясь на последующий upsertEmployee — тот больше не трогает
+    // эти поля, см. комментарий там) — так вход виден в облаке независимо от того, что ещё
+    // менялось на этом устройстве.
+    const writeRes = await safe(Promise.all([
+      db.collection('employees').doc(emp.id).set({ authUid, authEmail }, { merge: true }),
+      db.collection('directory').doc(emp.id).set({ authEmail }, { merge: true }),
+    ]));
+    if (writeRes.ok === false) throw new Error('PIN настроен, но запись в базе не удалась: ' + writeRes.err);
+    return { authUid, authEmail };
   }
 };
 
