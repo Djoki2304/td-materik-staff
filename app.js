@@ -832,11 +832,12 @@ const forms = {
     if (window.Cloud) {
       const pin = (fd.get('empPin') || '').trim();
       (pin ? Cloud.ensureEmployeeAuth(e, pin) : Promise.resolve(null))
-        .then(res => {
+        .then(async res => {
           if (res) { Object.assign(e, res); save(); }
-          Cloud.upsertEmployee(e);
+          const up = await Cloud.upsertEmployee(e);
+          if (pin) alert(up && up.ok === false ? 'PIN задан, но запись в базе не обновилась: ' + up.err : 'PIN сохранён и отправлен в облако (' + e.authEmail + ')');
         })
-        .catch(err => toast('Вход для сотрудника не настроен: ' + err.message));
+        .catch(err => alert('Вход для сотрудника не настроен: ' + err.message));
     }
   },
   pos: f => {
